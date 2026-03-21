@@ -4,8 +4,6 @@ provider "aws" {
 
 # --- Data sources ---
 
-data "aws_availability_zones" "all" {}
-
 data "aws_ami" "amazon_linux" {
   most_recent = true
   owners      = ["amazon"]
@@ -15,6 +13,8 @@ data "aws_ami" "amazon_linux" {
     values = ["amzn2-ami-hvm-*-x86_64-gp2"]
   }
 }
+
+data "aws_availability_zones" "all" {}
 
 data "aws_vpc" "default" {
   default = true
@@ -28,10 +28,9 @@ data "aws_subnets" "default" {
 }
 
 # --- Security group for ALB ---
-# Only allows inbound HTTP from the internet
 
 resource "aws_security_group" "alb_sg" {
-  name        = "${var.environment}-alb-sg"
+  name        = "${var.environment}-day5-alb-sg"
   description = "Allow HTTP inbound to ALB"
   vpc_id      = data.aws_vpc.default.id
 
@@ -56,11 +55,9 @@ resource "aws_security_group" "alb_sg" {
 }
 
 # --- Security group for EC2 instances ---
-# Only allows inbound traffic FROM the ALB security group
-# Instances are never directly reachable from the internet
 
 resource "aws_security_group" "instance_sg" {
-  name        = "${var.environment}-instance-sg"
+  name        = "${var.environment}-day5-instance-sg"
   description = "Allow HTTP from ALB only"
   vpc_id      = data.aws_vpc.default.id
 
@@ -85,10 +82,9 @@ resource "aws_security_group" "instance_sg" {
 }
 
 # --- Launch Template ---
-# Defines what each EC2 instance in the ASG looks like
 
 resource "aws_launch_template" "web" {
-  name_prefix   = "${var.environment}-web-"
+  name_prefix   = "${var.environment}-day5-web-"
   image_id      = data.aws_ami.amazon_linux.id
   instance_type = var.instance_type
 
@@ -100,19 +96,20 @@ resource "aws_launch_template" "web" {
               yum install -y httpd
               systemctl start httpd
               systemctl enable httpd
-              echo "<h1>Day 4 - Clustered Terraform Deployment</h1>
+              echo "<h1>Day 5 - Terraform State & ELB</h1>
               <p>Instance ID: $(curl -s http://169.254.169.254/latest/meta-data/instance-id)</p>
               <p>AZ: $(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone)</p>
-              <p>Environment: ${var.environment}</p>" > /var/www/html/index.html
+              <p>Private IP: $(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)</p>" > /var/www/html/index.html
               EOF
   )
 
   tag_specifications {
     resource_type = "instance"
     tags = {
-      Name        = "${var.environment}-asg-instance"
+      Name        = "${var.environment}-day5-instance"
       Environment = var.environment
       Project     = "30-day-terraform-challenge"
+      Day         = "5"
     }
   }
 }
@@ -120,23 +117,22 @@ resource "aws_launch_template" "web" {
 # --- Application Load Balancer ---
 
 resource "aws_lb" "web" {
-  name               = "${var.environment}-web-alb"
+  name               = "${var.environment}-day5-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = data.aws_subnets.default.ids
 
   tags = {
-    Name        = "${var.environment}-web-alb"
+    Name        = "${var.environment}-day5-alb"
     Environment = var.environment
   }
 }
 
 # --- Target Group ---
-# The ALB forwards traffic here; health checks run against /
 
 resource "aws_lb_target_group" "web" {
-  name     = "${var.environment}-web-tg"
+  name     = "${var.environment}-day5-tg"
   port     = var.server_port
   protocol = "HTTP"
   vpc_id   = data.aws_vpc.default.id
@@ -150,10 +146,14 @@ resource "aws_lb_target_group" "web" {
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }
+
+  tags = {
+    Name        = "${var.environment}-day5-tg"
+    Environment = var.environment
+  }
 }
 
 # --- ALB Listener ---
-# Tells the ALB what to do with incoming traffic on port 80
 
 resource "aws_lb_listener" "web" {
   load_balancer_arn = aws_lb.web.arn
@@ -169,13 +169,14 @@ resource "aws_lb_listener" "web" {
 # --- Auto Scaling Group ---
 
 resource "aws_autoscaling_group" "web" {
-  name                = "${var.environment}-web-asg"
+  name                = "${var.environment}-day5-asg"
   min_size            = var.min_size
   max_size            = var.max_size
   desired_capacity    = var.min_size
   vpc_zone_identifier = data.aws_subnets.default.ids
   target_group_arns   = [aws_lb_target_group.web.arn]
   health_check_type   = "ELB"
+  health_check_grace_period = 60
 
   launch_template {
     id      = aws_launch_template.web.id
@@ -184,7 +185,7 @@ resource "aws_autoscaling_group" "web" {
 
   tag {
     key                 = "Name"
-    value               = "${var.environment}-asg-instance"
+    value               = "${var.environment}-day5-instance"
     propagate_at_launch = true
   }
 

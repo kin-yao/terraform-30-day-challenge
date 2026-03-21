@@ -1,9 +1,9 @@
 output "alb_dns_name" {
-  description = "DNS name of the Application Load Balancer"
+  description = "The domain name of the load balancer"
   value       = aws_lb.web.dns_name
 }
 
 output "alb_url" {
-  description = "Full URL to access the load balanced web app"
+  description = "Full URL to hit in the browser"
   value       = "http://${aws_lb.web.dns_name}"
 }
